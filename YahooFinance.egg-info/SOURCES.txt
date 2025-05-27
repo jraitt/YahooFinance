@@ -1,0 +1,8 @@
+setup.py
+YahooFinance/__init__.py
+YahooFinance/yf_utilities.py
+YahooFinance.egg-info/PKG-INFO
+YahooFinance.egg-info/SOURCES.txt
+YahooFinance.egg-info/dependency_links.txt
+YahooFinance.egg-info/requires.txt
+YahooFinance.egg-info/top_level.txt
