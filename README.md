@@ -16,13 +16,27 @@ A custom Python package for fetching, processing, and analyzing financial data u
 
 ## Installation
 
-To install the `YahooFinance` package locally, navigate to the root directory of the project (where `setup.py` is located) and run:
+You can install the `YahooFinance` package directly from GitHub using pip:
 
 ```bash
-pip install .
+pip install git+https://github.com/jraitt/YahooFinance.git
 ```
 
-Ensure you have Python 3.6+ installed.
+Alternatively, to install locally (e.g., for development):
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/jraitt/YahooFinance.git
+   ```
+2. Navigate to the cloned directory:
+   ```bash
+   cd YahooFinance
+   ```
+3. Install the package:
+   ```bash
+   pip install .
+   ```
+
+Ensure you have Python 3.6+ and Git installed.
 
 ## Dependencies
 

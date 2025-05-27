@@ -76,6 +76,7 @@
 *   (For testing): `pytest`, `pytest-mock`
 
 Managed via `setup.py`.
+The project is hosted on GitHub: https://github.com/jraitt/YahooFinance.git
 
 ## 7. Constraints & Considerations
 
