@@ -32,7 +32,7 @@ def fetch_fund_details(tickers: list[str]) -> pd.DataFrame:
                 "Category": info.get("category"),
                 "Type": info.get('quoteType'),
                 "Price": info['regularMarketPrice'] if info.get('quoteType') == "MONEYMARKET" else round(fast_info['last_price'], 2),
-                "P Close": info['regularMarketPrice'] if info.get('quoteType') == "MONEYMARKET" else round(fast_info['previousClose'], 2),
+                "P Close": info['regularMarketPrice'] if info.get('quoteType') == "MONEYMARKET" else round(fast_info['regularMarketPreviousClose'], 2),
                 "52 High": info.get('fiftyTwoWeekHigh', np.nan),
                 "52 Low": info.get('fiftyTwoWeekLow', np.nan),
                 "50 Day": info.get('fiftyDayAverage', np.nan),
@@ -462,6 +462,9 @@ if __name__ == '__main__':
     fund_details_df = fetch_fund_details(tickers)
     returns_df = get_historical_returns(tickers)
     print(fund_details_df)
-    print(returns_df)
+    fund = yf.Ticker("VTI")
+    info = fund.info
+    fast_info = fund.fast_info
+    print(fast_info)
     
 
