@@ -48,12 +48,17 @@ def fetch_fund_details(tickers: list[str]) -> pd.DataFrame:
                 details["52 Low"] = 1.00
                 details["50 Day"] = 1.00
                 details["200 Day"] = 1.00
-                details["ER"] = 0.011
 
             if details.get("Type") == "INDEX":
                 details["Yield"] = "N/A"
                 details["ER"] = "N/A"
             
+            if details.get("Symbol") == "SPRXX":
+                details["ER"] = 0.0042
+            elif details.get("Symbol") == "VUSXX":
+                details["ER"] = 0.0011
+            elif details.get("Symbol") == "VMFXX":
+                details["ER"] = 0.0007   
             fund_details_list.append(details)
 
         except Exception as e:
@@ -458,13 +463,13 @@ def get_historical_returns(ticker_list: list[str]) -> pd.DataFrame:
     
 if __name__ == '__main__':
     # Example Usage
-    tickers = ["VTI", "VEA", "BND", "BNDX"]
+    tickers = ["VTI", "VEA", "BND", "BNDX", "VMFXX", "VUSXX", "SPRXX"]
     fund_details_df = fetch_fund_details(tickers)
     returns_df = get_historical_returns(tickers)
     print(fund_details_df)
-    fund = yf.Ticker("VTI")
-    info = fund.info
-    fast_info = fund.fast_info
-    print(fast_info)
+    # fund = yf.Ticker("VTI")
+    # info = fund.info
+    # fast_info = fund.fast_info
+    # print(fast_info)
     
 
