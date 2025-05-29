@@ -48,17 +48,12 @@ def fetch_fund_details(tickers: list[str]) -> pd.DataFrame:
                 details["52 Low"] = 1.00
                 details["50 Day"] = 1.00
                 details["200 Day"] = 1.00
+                details["ER"] = 0.0009
 
             if details.get("Type") == "INDEX":
                 details["Yield"] = "N/A"
                 details["ER"] = "N/A"
-            
-            if details.get("Symbol") == "SPRXX":
-                details["ER"] = 0.0042
-            elif details.get("Symbol") == "VUSXX":
-                details["ER"] = 0.0011
-            elif details.get("Symbol") == "VMFXX":
-                details["ER"] = 0.0007   
+
             fund_details_list.append(details)
 
         except Exception as e:
