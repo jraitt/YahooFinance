@@ -21,7 +21,9 @@ You can install the `YahooFinance` package directly from GitHub using pip:
 ```bash
 pip install git+https://github.com/jraitt/YahooFinance.git
 ```
-
+```bash
+pip install --upgrade git+https://github.com/jraitt/YahooFinance.git
+```
 Alternatively, to install locally (e.g., for development):
 1. Clone the repository:
    ```bash
