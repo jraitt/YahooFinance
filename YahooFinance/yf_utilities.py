@@ -92,30 +92,71 @@ def _get_data_filepath() -> str:
         os.makedirs(DATA_DIR)
     return os.path.join(DATA_DIR, HISTORICAL_DATA_FILE)
 
+def _get_ticker_types(tickers: list[str]) -> dict[str, str]:
+    """
+    Fetches the quoteType for a list of tickers.
+
+    Args:
+        tickers (list[str]): A list of ticker symbols.
+
+    Returns:
+        dict[str, str]: A dictionary mapping ticker symbols to their quoteType.
+                        Returns an empty dictionary if fetching fails for all tickers.
+    """
+    ticker_types = {}
+    for ticker in tickers:
+        try:
+            fund = yf.Ticker(ticker)
+            info = fund.info
+            ticker_types[ticker] = info.get('quoteType')
+        except Exception as e:
+            print(f"Error fetching quoteType for {ticker}: {e}")
+            ticker_types[ticker] = "UNKNOWN" # Assign a default or handle as needed
+    return ticker_types
+
 def fetch_and_store_max_history(tickers: list[str]):
     """
     Fetches the maximum available historical data (Close price only) for a list of tickers
     and stores it in a CSV file in a wide format (Date, Ticker1_Close, Ticker2_Close, ...).
+    Excludes MONEYMARKET type tickers. For INDEX type tickers, only fetches 10 years of data.
 
     Args:
         tickers (list[str]): A list of ticker symbols.
     """
     print(f"Fetching and storing max historical data (Close only) for: {tickers}")
-    close_series = {} # Dictionary to hold 'Close' series for each ticker
+    
+    ticker_types = _get_ticker_types(tickers)
+    filtered_tickers = [t for t in tickers if ticker_types.get(t) != "MONEYMARKET"]
+
+    if not filtered_tickers:
+        print("No non-MONEYMARKET tickers to fetch historical data for. Skipping.")
+        return
+
+    print(f"Fetching historical data for non-MONEYMARKET tickers: {filtered_tickers}")
+    close_series = {}
     data_filepath = _get_data_filepath()
 
-    for ticker in tickers:
+    for ticker in filtered_tickers:
         try:
-            print(f"Fetching max data for {ticker}...")
-            # Fetch data, auto_adjust=False keeps 'Close' and 'Adj Close' separate, we want 'Close'
-            data = yf.download(ticker, period="max", auto_adjust=False)
+            print(f"Fetching data for {ticker}...")
+            start_date = None
+            end_date = None
+            download_period = "max" # Default to max period
+
+            if ticker_types.get(ticker) == "INDEX":
+                start_date = "2000-01-01"
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                print(f"  Reason: {ticker} is an INDEX type, fetching data from {start_date} to present.")
+                data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=False)
+            else:
+                data = yf.download(ticker, period=download_period, auto_adjust=False)
             if not data.empty and 'Close' in data.columns:
-                close_series[ticker] = data['Close'].squeeze() # Get the Close series
-                print(f"Successfully fetched max data for {ticker}.")
+                close_series[ticker] = data['Close'].squeeze()
+                print(f"Successfully fetched data for {ticker}.")
             else:
                 print(f"Fetched empty data or missing 'Close' for {ticker}.")
         except Exception as e:
-            print(f"Error fetching max data for {ticker}: {e}")
+            print(f"Error fetching data for {ticker}: {e}")
 
     if close_series:
         # Combine all Close series into a single DataFrame, aligning by Date index
@@ -142,57 +183,86 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
     """
     Updates the historical data file with new data (Close price only) from the last stored date for each ticker.
     Loads existing data, fetches new data, combines them, and overwrites the file.
+    Data is only updated if the last stored data is more than 1 day old.
+    Does not attempt to update data for the current date.
+    Excludes MONEYMARKET type tickers.
 
     Args:
         tickers (list[str]): A list of ticker symbols.
+        force_update (bool): If True, forces an update regardless of data age.
     """
     print(f"Updating historical data (Close only) for: {tickers}")
+    
+    ticker_types = _get_ticker_types(tickers)
+    filtered_tickers = [t for t in tickers if ticker_types.get(t) != "MONEYMARKET"]
+
+    if not filtered_tickers:
+        print("No non-MONEYMARKET tickers to update historical data for. Skipping.")
+        return
+
+    print(f"Updating historical data for non-MONEYMARKET tickers: {filtered_tickers}")
     data_filepath = _get_data_filepath()
 
-    # Load existing data
-    existing_data = load_historical_data(tickers) # Use the updated load function
+    existing_data = load_historical_data(filtered_tickers) # Load only for filtered tickers
 
-    newly_fetched_close_series = {} # Dictionary to hold newly fetched 'Close' series
+    newly_fetched_close_series = {}
+    today = datetime.now().date() # Get today's date without time
 
-    for ticker in tickers:
-        # Get the last date for this specific ticker from the existing data
+    for ticker in filtered_tickers: # Iterate over filtered tickers
         last_date = None
         if not existing_data.empty and ticker in existing_data.columns:
-             # Find the last non-NaN date for this ticker
              last_date = existing_data.dropna(subset=[ticker])['Date'].max()
 
-
         if last_date:
-            # Fetch data from the day after the last date
+            # Reason: Check if the last update was less than or equal to 1 day ago.
+            # If so, skip updating for this ticker to avoid fetching current day's potentially incomplete data.
+            if (today - last_date.date()).days <= 1 and not force_update:
+                print(f"Skipping update for {ticker}. Last data is from {last_date.strftime('%Y-%m-%d')}, which is less than 2 days old.")
+                continue
+
             start_date = last_date + timedelta(days=1)
-            print(f"Fetching new data (Close only) for {ticker} from {start_date.strftime('%Y-%m-%d')} to today...")
+            # Reason: Set end_date to yesterday to avoid fetching data for the current day,
+            # as market might still be open and data incomplete.
+            end_date = today - timedelta(days=1)
+
+            if start_date.date() > end_date:
+                print(f"No new full days of data to fetch for {ticker} (start date {start_date.strftime('%Y-%m-%d')} is after or same as end date {end_date.strftime('%Y-%m-%d')}).")
+                continue
+
+            print(f"Fetching new data (Close only) for {ticker} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
             try:
-                # Fetch data, auto_adjust=False keeps 'Close' and 'Adj Close' separate, we want 'Close'
-                new_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), auto_adjust=False)
+                new_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), auto_adjust=False)
                 if not new_data.empty and 'Close' in new_data.columns:
                     squeezed_data = new_data['Close'].squeeze()
                     if pd.api.types.is_scalar(squeezed_data):
-                        # If squeeze returns a scalar, wrap it in a Series with the correct index
                         newly_fetched_close_series[ticker] = pd.Series([squeezed_data], index=[new_data.index[0]])
                     else:
-                        newly_fetched_close_series[ticker] = squeezed_data # It's already a Series
+                        newly_fetched_close_series[ticker] = squeezed_data
                     print(f"Successfully fetched new data for {ticker}.")
                 else:
-                    print(f"No new data available for {ticker} since {last_date.strftime('%Y-%m-%d')}.")
+                    print(f"No new data available for {ticker} between {start_date.strftime('%Y-%m-%d')} and {end_date.strftime('%Y-%m-%d')}.")
             except Exception as e:
                 print(f"Error fetching new data for {ticker}: {e}")
         else:
-            # If no existing data for this ticker, fetch max history for it
-            print(f"No existing data found for {ticker}. Fetching max history for this ticker.")
+            # If no existing data for this ticker, fetch max history up to yesterday
+            print(f"No existing data found for {ticker}. Fetching max history for this ticker up to yesterday.")
             try:
-                 data = yf.download(ticker, period="max", auto_adjust=False)
+                 start_date_fetch = None
+                 end_date_fetch = today.strftime('%Y-%m-%d') # Always fetch up to yesterday for initial load
+                 download_period = "max" # Default to max period
+
+                 if ticker_types.get(ticker) == "INDEX":
+                     start_date_fetch = "2000-01-01"
+                     print(f"  Reason: {ticker} is an INDEX type, fetching data from {start_date_fetch} to {end_date_fetch}.")
+                     data = yf.download(ticker, start=start_date_fetch, end=end_date_fetch, auto_adjust=False)
+                 else:
+                     data = yf.download(ticker, period=download_period, end=end_date_fetch, auto_adjust=False)
                  if not data.empty and 'Close' in data.columns:
                       squeezed_data = data['Close'].squeeze()
                       if pd.api.types.is_scalar(squeezed_data):
-                           # If squeeze returns a scalar, wrap it in a Series with the correct index
                            newly_fetched_close_series[ticker] = pd.Series([squeezed_data], index=[data.index[0]])
                       else:
-                           newly_fetched_close_series[ticker] = squeezed_data # It's already a Series
+                           newly_fetched_close_series[ticker] = squeezed_data
                       print(f"Successfully fetched max data for {ticker}.")
                  else:
                       print(f"Fetched empty data or missing 'Close' for {ticker}.")
@@ -240,6 +310,7 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
 def load_historical_data(tickers: list[str] = None) -> pd.DataFrame:
     """
     Loads historical data from the CSV file.
+    Excludes MONEYMARKET type tickers from the loaded DataFrame.
 
     Args:
         tickers (list[str], optional): A list of ticker symbols to filter by. If None, loads data for all tickers. Defaults to None.
@@ -259,35 +330,49 @@ def load_historical_data(tickers: list[str] = None) -> pd.DataFrame:
             print("Historical data file is empty.")
             return pd.DataFrame()
 
-        # The CSV is now in a wide format: Date, Ticker1, Ticker2, ...
-        # We don't need to filter by ticker here, as all tickers are columns.
-        # The 'tickers' argument can still be used by the caller to select specific columns if needed.
+        # Identify ticker columns (all columns except 'Date')
+        existing_ticker_cols = [col for col in df.columns if col != 'Date']
 
-        # Ensure numeric columns (the ticker columns) are of the correct type
-        # Use the provided tickers list to identify the numeric columns
-        numeric_cols = tickers if tickers is not None else df.columns.tolist()
-        # Exclude 'Date' from numeric conversion
-        if 'Date' in numeric_cols:
-            numeric_cols.remove('Date')
+        if existing_ticker_cols:
+            # Get types for existing tickers in the CSV
+            ticker_types = _get_ticker_types(existing_ticker_cols)
+            
+            # Filter out MONEYMARKET tickers from the columns
+            non_moneymarket_cols = [t for t in existing_ticker_cols if ticker_types.get(t) != "MONEYMARKET"]
+            
+            # Keep 'Date' and only non-MONEYMARKET ticker columns
+            cols_to_keep = ['Date'] + non_moneymarket_cols
+            df = df[cols_to_keep]
+            
+            # If the 'tickers' argument was provided, further filter the columns
+            if tickers is not None:
+                # Ensure that the requested tickers are also non-MONEYMARKET
+                requested_non_moneymarket_tickers = [t for t in tickers if ticker_types.get(t) != "MONEYMARKET"]
+                final_cols = ['Date'] + [col for col in requested_non_moneymarket_tickers if col in df.columns]
+                df = df[final_cols]
+            
+            # Ensure numeric columns (the ticker columns) are of the correct type
+            numeric_cols = [col for col in df.columns if col != 'Date']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        for col in numeric_cols:
-            if col in df.columns:
-                # Use errors='coerce' to turn non-numeric values into NaN
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            # Drop rows where essential numeric data (any of the ticker columns if tickers were specified) could not be converted
+            # This part might need adjustment if we only want to drop rows where *all* relevant ticker data is NaN
+            # For now, keep it as is, assuming it's fine to have NaNs for missing data.
+            # The previous fillna(0.0) handles this.
 
-        # Drop rows where essential numeric data (any of the ticker columns if tickers were specified) could not be converted
-        subset_cols_to_check = tickers if tickers is not None else df.columns.tolist()
-        if 'Date' in subset_cols_to_check:
-             subset_cols_to_check.remove('Date')
-        # Ensure data is sorted by Date
-        df = df.sort_values(by=['Date'])
+            # Ensure data is sorted by Date
+            df = df.sort_values(by=['Date'])
 
-        # Fill NaN values in ticker columns with 0.0
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = df[col].fillna(0.0)
+            # Fill NaN values in ticker columns with 0.0
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna(0.0)
+        else:
+            # If no ticker columns exist in the CSV, return an empty DataFrame with just 'Date'
+            df = pd.DataFrame(columns=['Date'])
 
-        #print(df)
         return df
 
     except Exception as e:
@@ -396,6 +481,7 @@ def get_historical_returns(ticker_list: list[str]) -> pd.DataFrame:
     This function loads historical data, processes it to calculate returns for
     various periods (1w, 1mo, 3mo, 6mo, ytd, 1y, 2y, 5y, 10y, max), and
     returns a DataFrame with tickers as the index and 'Inception' date as a column.
+    Excludes MONEYMARKET type tickers from calculations.
 
     Args:
         ticker_list (list[str]): A list of ticker symbols for which to calculate returns.
@@ -408,7 +494,14 @@ def get_historical_returns(ticker_list: list[str]) -> pd.DataFrame:
     PERIODS = ["1w", "1mo", "3mo", "6mo", "ytd", "1y", "2y", "3y", "5y", "10y", "max"]
     expected_returns_cols = PERIODS + ['Inception']
 
-    historical_data_df = load_historical_data(ticker_list)
+    ticker_types = _get_ticker_types(ticker_list)
+    filtered_ticker_list = [t for t in ticker_list if ticker_types.get(t) != "MONEYMARKET"]
+
+    if not filtered_ticker_list:
+        print("No non-MONEYMARKET tickers to calculate historical returns for. Returning empty DataFrame.")
+        return pd.DataFrame(columns=expected_returns_cols).set_index(pd.Index([], name='Symbol'))
+
+    historical_data_df = load_historical_data(filtered_ticker_list) # Load only for filtered tickers
 
     if historical_data_df.empty:
         print("No historical data loaded. Returning empty DataFrame with expected columns.")
@@ -421,7 +514,7 @@ def get_historical_returns(ticker_list: list[str]) -> pd.DataFrame:
     returns_data_for_df = {}
     fund_earliest_dates = {}
 
-    for ticker in ticker_list:
+    for ticker in filtered_ticker_list: # Iterate over filtered tickers
         if ticker in combined_data.columns:
             fund_prices = combined_data[ticker]
             # Find the index of the first non-zero price
@@ -458,13 +551,13 @@ def get_historical_returns(ticker_list: list[str]) -> pd.DataFrame:
     
 if __name__ == '__main__':
     # Example Usage
-    tickers = ["VTI", "VEA", "BND", "BNDX", "VMFXX", "VUSXX", "SPRXX"]
+    tickers = ["VTI", "VEA", "BND", "BNDX", "FZROX", "VFIDX", "VFSUX", "VMFXX", "VUSXX", "SPRXX","^GSPC", "^DJI", "^IXIC", "^NYA"]
+    update_historical_data(tickers) # Uncomment to update historical data
     fund_details_df = fetch_fund_details(tickers)
     returns_df = get_historical_returns(tickers)
     print(fund_details_df)
+    print(returns_df)
     # fund = yf.Ticker("VTI")
     # info = fund.info
     # fast_info = fund.fast_info
     # print(fast_info)
-    
-

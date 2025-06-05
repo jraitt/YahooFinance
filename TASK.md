@@ -7,4 +7,9 @@
 
 ### To Do
 
+### Completed
+- **Modify `update_historical_data` to only update data older than 1 day and exclude the current date** - 2025-06-05
+- **Exclude MONEYMARKET tickers from historical data fetching, updating, returns calculations, and loading from CSV** - 2025-06-05
+- **Change historical data fetching for INDEX type tickers to download from 1/1/2000 to present** - 2025-06-05
+
 ### Discovered During Work
