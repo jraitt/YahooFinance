@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import os
 from pandas.tseries.offsets import DateOffset
+import pytz
 
 
 def fetch_fund_details(tickers: list[str]) -> pd.DataFrame:
@@ -91,6 +92,45 @@ def _get_data_filepath() -> str:
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
     return os.path.join(DATA_DIR, HISTORICAL_DATA_FILE)
+
+def _get_latest_trading_day() -> datetime:
+    """
+    Returns the latest trading day that should have complete data.
+    
+    Rules:
+    - If today is a weekday and it's after 4:30 PM ET, return today's date
+    - If today is a weekday and it's before 4:30 PM ET, return previous trading day
+    - If today is weekend, return Friday
+    
+    Returns:
+        datetime: The latest trading day date
+    """
+    # Get current time in ET
+    et_tz = pytz.timezone('US/Eastern')
+    now_et = datetime.now(et_tz)
+    today = now_et.date()
+    
+    # Market closes at 4 PM ET, but wait until 4:30 PM ET for complete data (16:30)
+    market_close_time = now_et.replace(hour=16, minute=30, second=0, microsecond=0)
+    
+    # Check if today is a weekend
+    if today.weekday() >= 5:  # Saturday = 5, Sunday = 6
+        # Go back to Friday
+        days_back = today.weekday() - 4  # Friday = 4
+        return datetime.combine(today - timedelta(days=days_back), datetime.min.time())
+    
+    # Today is a weekday
+    if now_et >= market_close_time:
+        # After market close, today's data should be available
+        return datetime.combine(today, datetime.min.time())
+    else:
+        # Before market close, use previous trading day
+        if today.weekday() == 0:  # Monday
+            # Previous trading day is Friday
+            return datetime.combine(today - timedelta(days=3), datetime.min.time())
+        else:
+            # Previous trading day is yesterday
+            return datetime.combine(today - timedelta(days=1), datetime.min.time())
 
 def _get_ticker_types(tickers: list[str]) -> dict[str, str]:
     """
@@ -206,7 +246,7 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
     existing_data = load_historical_data(filtered_tickers) # Load only for filtered tickers
 
     newly_fetched_close_series = {}
-    today = datetime.now().date() # Get today's date without time
+    latest_trading_day = _get_latest_trading_day()
 
     for ticker in filtered_tickers: # Iterate over filtered tickers
         last_date = None
@@ -214,41 +254,47 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
              last_date = existing_data.dropna(subset=[ticker])['Date'].max()
 
         if last_date:
-            # Reason: Check if the last update was less than or equal to 1 day ago.
-            # If so, skip updating for this ticker to avoid fetching current day's potentially incomplete data.
-            if (today - last_date.date()).days <= 1 and not force_update:
-                print(f"Skipping update for {ticker}. Last data is from {last_date.strftime('%Y-%m-%d')}, which is less than 2 days old.")
+            # Check if we already have data for the latest trading day
+            if last_date.date() >= latest_trading_day.date() and not force_update:
+                print(f"Skipping update for {ticker}. Last data is from {last_date.strftime('%Y-%m-%d')}, which is current for latest trading day {latest_trading_day.strftime('%Y-%m-%d')}.")
                 continue
 
             start_date = last_date + timedelta(days=1)
-            # Reason: Set end_date to yesterday to avoid fetching data for the current day,
-            # as market might still be open and data incomplete.
-            end_date = today - timedelta(days=1)
+            end_date = latest_trading_day
 
-            if start_date.date() > end_date:
-                print(f"No new full days of data to fetch for {ticker} (start date {start_date.strftime('%Y-%m-%d')} is after or same as end date {end_date.strftime('%Y-%m-%d')}).")
+            if start_date.date() > end_date.date():
+                print(f"No new trading days of data to fetch for {ticker} (start date {start_date.strftime('%Y-%m-%d')} is after latest trading day {end_date.strftime('%Y-%m-%d')}).")
                 continue
 
             print(f"Fetching new data (Close only) for {ticker} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
             try:
-                new_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), auto_adjust=False)
+                # Use a broader date range to account for holidays and weekends
+                extended_end_date = end_date + timedelta(days=1)  # Add one day to ensure we get the end_date data
+                new_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=extended_end_date.strftime('%Y-%m-%d'), auto_adjust=False)
+                
                 if not new_data.empty and 'Close' in new_data.columns:
-                    squeezed_data = new_data['Close'].squeeze()
-                    if pd.api.types.is_scalar(squeezed_data):
-                        newly_fetched_close_series[ticker] = pd.Series([squeezed_data], index=[new_data.index[0]])
+                    # Filter to only include data up to our target end_date
+                    new_data = new_data[new_data.index.date <= end_date.date()]
+                    
+                    if not new_data.empty:
+                        squeezed_data = new_data['Close'].squeeze()
+                        if pd.api.types.is_scalar(squeezed_data):
+                            newly_fetched_close_series[ticker] = pd.Series([squeezed_data], index=[new_data.index[0]])
+                        else:
+                            newly_fetched_close_series[ticker] = squeezed_data
+                        print(f"Successfully fetched new data for {ticker} ({len(new_data)} trading days).")
                     else:
-                        newly_fetched_close_series[ticker] = squeezed_data
-                    print(f"Successfully fetched new data for {ticker}.")
+                        print(f"No new trading days with data for {ticker} in the specified range.")
                 else:
                     print(f"No new data available for {ticker} between {start_date.strftime('%Y-%m-%d')} and {end_date.strftime('%Y-%m-%d')}.")
             except Exception as e:
                 print(f"Error fetching new data for {ticker}: {e}")
         else:
-            # If no existing data for this ticker, fetch max history up to yesterday
-            print(f"No existing data found for {ticker}. Fetching max history for this ticker up to yesterday.")
+            # If no existing data for this ticker, fetch max history up to latest trading day
+            print(f"No existing data found for {ticker}. Fetching max history for this ticker up to latest trading day.")
             try:
                  start_date_fetch = None
-                 end_date_fetch = today.strftime('%Y-%m-%d') # Always fetch up to yesterday for initial load
+                 end_date_fetch = latest_trading_day.strftime('%Y-%m-%d')
                  download_period = "max" # Default to max period
 
                  if ticker_types.get(ticker) == "INDEX":
@@ -292,9 +338,9 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
         combined_data['Date'] = pd.to_datetime(combined_data['Date'])
         combined_data = combined_data.sort_values(by=['Date'])
 
-        # Ensure all original tickers are present as columns, even if no new data was fetched for them
-        # Use the tickers list provided to the function for consistent column order
-        column_order = ['Date'] + tickers
+        # Ensure all filtered tickers are present as columns, even if no new data was fetched for them
+        # Use the filtered_tickers list for consistent column order (excludes MONEYMARKET)
+        column_order = ['Date'] + filtered_tickers
         combined_data = combined_data.reindex(columns=column_order)
 
 
