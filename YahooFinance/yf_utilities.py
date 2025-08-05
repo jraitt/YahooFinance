@@ -187,9 +187,9 @@ def fetch_and_store_max_history(tickers: list[str]):
                 start_date = "2000-01-01"
                 end_date = datetime.now().strftime('%Y-%m-%d')
                 print(f"  Reason: {ticker} is an INDEX type, fetching data from {start_date} to present.")
-                data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=False)
+                data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=True)
             else:
-                data = yf.download(ticker, period=download_period, auto_adjust=False)
+                data = yf.download(ticker, period=download_period, auto_adjust=True)
             if not data.empty and 'Close' in data.columns:
                 close_series[ticker] = data['Close'].squeeze()
                 print(f"Successfully fetched data for {ticker}.")
@@ -270,7 +270,7 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
             try:
                 # Use a broader date range to account for holidays and weekends
                 extended_end_date = end_date + timedelta(days=1)  # Add one day to ensure we get the end_date data
-                new_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=extended_end_date.strftime('%Y-%m-%d'), auto_adjust=False)
+                new_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=extended_end_date.strftime('%Y-%m-%d'), auto_adjust=True)
                 
                 if not new_data.empty and 'Close' in new_data.columns:
                     # Filter to only include data up to our target end_date
@@ -300,9 +300,9 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
                  if ticker_types.get(ticker) == "INDEX":
                      start_date_fetch = "2000-01-01"
                      print(f"  Reason: {ticker} is an INDEX type, fetching data from {start_date_fetch} to {end_date_fetch}.")
-                     data = yf.download(ticker, start=start_date_fetch, end=end_date_fetch, auto_adjust=False)
+                     data = yf.download(ticker, start=start_date_fetch, end=end_date_fetch, auto_adjust=True)
                  else:
-                     data = yf.download(ticker, period=download_period, end=end_date_fetch, auto_adjust=False)
+                     data = yf.download(ticker, period=download_period, end=end_date_fetch, auto_adjust=True)
                  if not data.empty and 'Close' in data.columns:
                       squeezed_data = data['Close'].squeeze()
                       if pd.api.types.is_scalar(squeezed_data):
@@ -428,6 +428,7 @@ def load_historical_data(tickers: list[str] = None) -> pd.DataFrame:
 def calculate_individual_fund_period_return(prices: pd.Series, period_label: str) -> float | None:
     """
     Calculates the percentage return for a single fund over a specified period.
+    Multi-year returns (2y, 3y, 5y, 10y) are annualized.
 
     Args:
         prices (pd.Series): Series of historical close prices for a single fund (indexed by Date).
@@ -476,7 +477,18 @@ def calculate_individual_fund_period_return(prices: pd.Series, period_label: str
         return (end_price / start_price) - 1
 
     else:
-        offset = None
+        # Map period labels to years for annualization
+        period_to_years = {
+            "1w": 1/52, "1mo": 1/12, "3mo": 0.25, "6mo": 0.5, "1y": 1,
+            "2y": 2, "3y": 3, "5y": 5, "10y": 10
+        }
+        
+        if period_label not in period_to_years:
+            return None # Invalid period label
+            
+        years = period_to_years[period_label]
+        
+        # Calculate the target start date
         if period_label == "1w":
             offset = DateOffset(weeks=1)
         elif period_label == "1mo":
@@ -495,30 +507,27 @@ def calculate_individual_fund_period_return(prices: pd.Series, period_label: str
             offset = DateOffset(years=5)
         elif period_label == "10y":
             offset = DateOffset(years=10)
-        else:
-            return None # Invalid period label
 
         target_start_date = end_date - offset
 
-        # Find the closest trading day on or before the target_start_date
+        # Find the closest trading day on or before the target_start_date (business day convention)
         start_date_series = prices.loc[prices.index <= target_start_date]
 
         if start_date_series.empty:
             return None # Not enough historical data for the period
 
-        # Use the price from the trading day *before* the start of the period
-        # If the target_start_date is the very first date, use that date's price
-        if start_date_series.index[-1] == prices.index[0]:
-             start_price = start_date_series.iloc[-1]
-        else:
-            # Find the index of the closest date on or before target_start_date
-            closest_date_index = prices.index.get_loc(start_date_series.index[-1])
-            # Get the price from the day before
-            start_price = prices.iloc[closest_date_index - 1]
-
+        start_price = start_date_series.iloc[-1]
+        
         if start_price == 0:
             return None # Return None for division by zero, indicating N/A
-        return (end_price / start_price) - 1
+            
+        total_return = (end_price / start_price) - 1
+        
+        # Annualize multi-year returns
+        if years > 1:
+            return (1 + total_return) ** (1/years) - 1
+        else:
+            return total_return
     
 def get_historical_returns(ticker_list: list[str]) -> pd.DataFrame:
     """
