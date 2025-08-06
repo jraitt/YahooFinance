@@ -93,14 +93,21 @@ def _get_data_filepath() -> str:
         os.makedirs(DATA_DIR)
     return os.path.join(DATA_DIR, HISTORICAL_DATA_FILE)
 
-def _get_latest_trading_day() -> datetime:
+def _get_latest_trading_day(security_type: str = "ETF") -> datetime:
     """
     Returns the latest trading day that should have complete data.
     
-    Rules:
+    Rules for ETFs/Stocks/Indices:
     - If today is a weekday and it's after 4:30 PM ET, return today's date
     - If today is a weekday and it's before 4:30 PM ET, return previous trading day
     - If today is weekend, return Friday
+    
+    Rules for Mutual Funds:
+    - Mutual fund NAVs are available with 1-day delay
+    - Always use previous trading day regardless of time
+    
+    Args:
+        security_type (str): Type of security ("ETF", "MUTUALFUND", "INDEX", etc.)
     
     Returns:
         datetime: The latest trading day date
@@ -119,7 +126,16 @@ def _get_latest_trading_day() -> datetime:
         days_back = today.weekday() - 4  # Friday = 4
         return datetime.combine(today - timedelta(days=days_back), datetime.min.time())
     
-    # Today is a weekday
+    # Special handling for mutual funds - always use previous trading day
+    if security_type == "MUTUALFUND":
+        if today.weekday() == 0:  # Monday
+            # Previous trading day is Friday
+            return datetime.combine(today - timedelta(days=3), datetime.min.time())
+        else:
+            # Previous trading day is yesterday
+            return datetime.combine(today - timedelta(days=1), datetime.min.time())
+    
+    # Today is a weekday (ETFs, Stocks, Indices)
     if now_et >= market_close_time:
         # After market close, today's data should be available
         return datetime.combine(today, datetime.min.time())
@@ -246,9 +262,11 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
     existing_data = load_historical_data(filtered_tickers) # Load only for filtered tickers
 
     newly_fetched_close_series = {}
-    latest_trading_day = _get_latest_trading_day()
 
     for ticker in filtered_tickers: # Iterate over filtered tickers
+        # Get the latest trading day specific to this security type
+        security_type = ticker_types.get(ticker, "ETF")
+        latest_trading_day = _get_latest_trading_day(security_type)
         last_date = None
         if not existing_data.empty and ticker in existing_data.columns:
              last_date = existing_data.dropna(subset=[ticker])['Date'].max()
@@ -441,16 +459,22 @@ def calculate_individual_fund_period_return(prices: pd.Series, period_label: str
         return None
 
     prices = prices.sort_index() # Ensure prices are sorted by date
-    end_date = prices.index[-1]
-    end_price = prices.iloc[-1]
+    
+    # Find the last non-zero, non-null price
+    valid_prices = prices[(prices != 0) & prices.notna()]
+    if valid_prices.empty:
+        return None # No valid prices found
+    
+    end_date = valid_prices.index[-1]
+    end_price = valid_prices.iloc[-1]
 
     if period_label == "max":
-        # Find the index of the first non-zero price
-        first_non_zero_index = prices[prices != 0].first_valid_index()
-        if first_non_zero_index is None:
-            return None # No non-zero prices found
+        # Find the index of the first non-zero, non-null price
+        first_valid_index = valid_prices.first_valid_index()
+        if first_valid_index is None:
+            return None # No valid prices found
 
-        start_price = prices.loc[first_non_zero_index]
+        start_price = valid_prices.loc[first_valid_index]
         if start_price == 0:
             return None # Return None for division by zero, indicating N/A
         return (end_price / start_price) - 1
@@ -460,17 +484,17 @@ def calculate_individual_fund_period_return(prices: pd.Series, period_label: str
 
         # Calculate Year-to-Date return using the last trading day of the previous year as the base
         start_of_current_year = pd.Timestamp(f'{end_year}-01-01')
-        # Find the last trading day of the previous year
-        previous_year_end_date_series = prices.loc[prices.index < start_of_current_year]
+        # Find the last valid trading day of the previous year
+        previous_year_valid_prices = valid_prices.loc[valid_prices.index < start_of_current_year]
 
-        if previous_year_end_date_series.empty:
-            # If no data in the previous year, use the first available data point in the current year
-            current_year_start_date_series = prices.loc[prices.index >= start_of_current_year]
-            if current_year_start_date_series.empty:
-                return None # No data points in the current year
-            start_price = current_year_start_date_series.iloc[0]
+        if previous_year_valid_prices.empty:
+            # If no data in the previous year, use the first available valid data point in the current year
+            current_year_valid_prices = valid_prices.loc[valid_prices.index >= start_of_current_year]
+            if current_year_valid_prices.empty:
+                return None # No valid data points in the current year
+            start_price = current_year_valid_prices.iloc[0]
         else:
-            start_price = previous_year_end_date_series.iloc[-1]
+            start_price = previous_year_valid_prices.iloc[-1]
 
         if start_price == 0:
             return None # Return None for division by zero, indicating N/A
@@ -510,13 +534,13 @@ def calculate_individual_fund_period_return(prices: pd.Series, period_label: str
 
         target_start_date = end_date - offset
 
-        # Find the closest trading day on or before the target_start_date (business day convention)
-        start_date_series = prices.loc[prices.index <= target_start_date]
+        # Find the closest valid trading day on or before the target_start_date (business day convention)
+        start_date_valid_prices = valid_prices.loc[valid_prices.index <= target_start_date]
 
-        if start_date_series.empty:
-            return None # Not enough historical data for the period
+        if start_date_valid_prices.empty:
+            return None # Not enough valid historical data for the period
 
-        start_price = start_date_series.iloc[-1]
+        start_price = start_date_valid_prices.iloc[-1]
         
         if start_price == 0:
             return None # Return None for division by zero, indicating N/A
