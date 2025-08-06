@@ -269,7 +269,10 @@ def update_historical_data(tickers: list[str], force_update: bool = False):
         latest_trading_day = _get_latest_trading_day(security_type)
         last_date = None
         if not existing_data.empty and ticker in existing_data.columns:
-             last_date = existing_data.dropna(subset=[ticker])['Date'].max()
+            # Find the last date with valid (non-null, non-zero) data for this ticker
+            valid_data = existing_data[(existing_data[ticker].notna()) & (existing_data[ticker] != 0)]
+            if not valid_data.empty:
+                last_date = valid_data['Date'].max()
 
         if last_date:
             # Check if we already have data for the latest trading day
