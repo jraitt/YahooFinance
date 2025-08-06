@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='YahooFinance',
-    version='0.1.8',
+    version='0.1.9',
     packages=find_packages(),
     description='Custom Yahoo Finance utilities package for financial analysis.',
     long_description='A custom package for Yahoo Finance related utilities.', # Simpler default
