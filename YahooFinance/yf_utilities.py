@@ -477,10 +477,24 @@ def calculate_individual_fund_period_return(prices: pd.Series, period_label: str
         if first_valid_index is None:
             return None # No valid prices found
 
+        start_date = valid_prices.index[0]
         start_price = valid_prices.loc[first_valid_index]
         if start_price == 0:
             return None # Return None for division by zero, indicating N/A
-        return (end_price / start_price) - 1
+            
+        # Calculate total return
+        total_return = (end_price / start_price) - 1
+        
+        # Calculate time period in years
+        time_delta = end_date - start_date
+        years = time_delta.days / 365.25
+        
+        # Return annualized return to match Morningstar's "Earliest Available" format
+        if years > 0:
+            annualized_return = (1 + total_return) ** (1/years) - 1
+            return annualized_return
+        else:
+            return total_return
     elif period_label == "ytd":
         # Calculate Year-to-Date return
         end_year = end_date.year
